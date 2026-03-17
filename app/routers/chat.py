@@ -14,10 +14,12 @@ from app.rag.retriever import RetrievedChunk
 from app.schemas import AgentType, ChatRequest, ChatResponse, SourceReference
 from app.services.preferences import (
     compress_plan,
+    extract_memory_from_conversation,
     format_preferences_for_prompt,
     get_other_agent_plan,
     get_user_preferences,
     save_agent_plan,
+    save_preferences,
 )
 
 logger = logging.getLogger(__name__)
@@ -147,7 +149,7 @@ async def chat(data: ChatRequest, db: AsyncSession = Depends(get_db)):
     db.add(assistant_msg)
     await db.flush()
 
-    # Save plan summary for cross-agent coordination (background, best-effort)
+    # Save plan summary for cross-agent coordination (best-effort)
     if agent_key in ("trainer", "dietologist") and len(response_text) > 200:
         try:
             summary = await compress_plan(response_text, agent_key)
@@ -155,6 +157,16 @@ async def chat(data: ChatRequest, db: AsyncSession = Depends(get_db)):
                 await save_agent_plan(db, user.id, agent_key, summary)
         except Exception:
             logger.exception("Failed to save plan summary")
+
+    # Extract and save user memory from conversation (best-effort)
+    try:
+        facts = await extract_memory_from_conversation(data.message, response_text)
+        if facts:
+            await save_preferences(db, user.id, facts)
+            logger.info("Learned %d facts about user %s: %s",
+                        len(facts), user.name, [f["key"] for f in facts])
+    except Exception:
+        logger.debug("Memory extraction skipped")
 
     await db.commit()
 

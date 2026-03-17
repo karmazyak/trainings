@@ -29,6 +29,32 @@ EXTRACT_PROMPT = (
     "Только JSON, без пояснений."
 )
 
+# Prompt for extracting facts from conversation messages
+MEMORY_EXTRACT_PROMPT = (
+    "Проанализируй диалог пользователя с AI-тренером/нутрициологом.\n"
+    "Извлеки НОВЫЕ ФАКТЫ о пользователе, которые стоит запомнить для будущих рекомендаций.\n\n"
+    "Какие факты запоминать:\n"
+    "- Физические особенности: травмы, боли, ограничения (\"болит колено\", \"грыжа поясницы\")\n"
+    "- Пищевые предпочтения: любимые/нелюбимые продукты (\"не ем рыбу\", \"люблю творог\")\n"
+    "- Режим: время тренировок, сна, работы (\"тренируюсь утром\", \"работаю ночью\")\n"
+    "- Оборудование: что есть дома (\"есть гантели до 20 кг\", \"есть турник\")\n"
+    "- Опыт: конкретные навыки (\"умею делать стойку на руках\", \"никогда не бегал\")\n"
+    "- Цели: конкретные (\"хочу подтянуться 20 раз\", \"готовлюсь к марафону\")\n"
+    "- Нелюбимые упражнения/активности (\"ненавижу берпи\", \"скучно на беговой\")\n\n"
+    "НЕ запоминай:\n"
+    "- Общие вопросы (\"сколько повторений?\") — это не факт о пользователе\n"
+    "- То, что уже есть в профиле (цель, уровень, пол)\n"
+    "- Временные состояния (\"сегодня устал\")\n\n"
+    "Сообщение пользователя: {user_message}\n"
+    "Ответ агента: {agent_response}\n\n"
+    "Верни JSON-список фактов (или [] если новых фактов нет):\n"
+    '[{{"category": "training"|"nutrition"|"general", '
+    '"key": "краткий_ключ_english", '
+    '"value": "факт на русском (1 предложение)", '
+    '"confidence": 0.5-0.9}}]\n\n'
+    "Только JSON, без пояснений."
+)
+
 COMPRESS_PROMPT = (
     "Сожми этот {agent_type_label} план до краткого резюме (максимум 150 слов). "
     "Сохрани ключевую информацию: упражнения/блюда, объёмы, дни, калории.\n\n"
@@ -117,14 +143,66 @@ async def get_user_preferences(
 
 
 def format_preferences_for_prompt(prefs: list[dict]) -> str:
-    """Format preferences list into text for agent system prompt."""
+    """Format preferences list into text for agent system prompt.
+
+    Groups by category and shows confidence level.
+    High-confidence facts (>= 0.7) are marked as confirmed.
+    """
     if not prefs:
         return ""
-    lines = []
+
+    # Group by category for readability
+    by_cat: dict[str, list] = {}
     for p in prefs:
-        conf = "высокая" if p["confidence"] >= 0.7 else "средняя"
-        lines.append(f"- {p['value']} (уверенность: {conf})")
+        cat = p.get("category", "general")
+        by_cat.setdefault(cat, []).append(p)
+
+    cat_labels = {
+        "training": "Тренировки",
+        "nutrition": "Питание",
+        "general": "Общее",
+    }
+
+    lines = []
+    for cat, items in by_cat.items():
+        label = cat_labels.get(cat, cat)
+        lines.append(f"[{label}]")
+        for p in items:
+            conf = "✓" if p["confidence"] >= 0.7 else "~"
+            lines.append(f"  {conf} {p['value']}")
+
     return "\n".join(lines)
+
+
+async def extract_memory_from_conversation(
+    user_message: str, agent_response: str
+) -> list[dict]:
+    """Extract memorable facts from a conversation turn using cheap LLM.
+
+    Called after every chat response to build up user memory over time.
+    Returns empty list for generic questions with no personal info.
+    """
+    # Quick filter: skip very short or obviously generic messages
+    if len(user_message) < 15:
+        return []
+
+    prompt = MEMORY_EXTRACT_PROMPT.format(
+        user_message=user_message[:500],
+        agent_response=agent_response[:500],
+    )
+    messages = [{"role": "user", "content": prompt}]
+    try:
+        result = await llm_call_cheap(messages, temperature=0.1)
+        result = result.strip()
+        if result.startswith("```"):
+            result = result.split("\n", 1)[1].rsplit("```", 1)[0]
+        facts = json.loads(result)
+        if not isinstance(facts, list):
+            return []
+        return [f for f in facts if isinstance(f, dict) and "key" in f and "value" in f]
+    except Exception:
+        logger.debug("No memory extracted (this is normal for generic messages)")
+        return []
 
 
 async def compress_plan(plan_text: str, agent_type: str) -> str:
