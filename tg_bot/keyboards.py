@@ -165,6 +165,59 @@ TRAINING_STYLE_LABELS = {
 }
 
 
+# ── Activity level keyboard ───────────────────────────
+
+def activity_level_kb() -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(text="🛋 1-2 раза/нед", callback_data="activity_sedentary"),
+        InlineKeyboardButton(text="🚶 3 раза/нед", callback_data="activity_light"),
+    )
+    builder.row(
+        InlineKeyboardButton(text="🏃 4-5 раз/нед", callback_data="activity_moderate"),
+        InlineKeyboardButton(text="🔥 6-7 раз/нед", callback_data="activity_active"),
+    )
+    return builder.as_markup()
+
+
+ACTIVITY_LABELS = {
+    "sedentary": "1-2 тренировки в неделю",
+    "light": "3 тренировки в неделю",
+    "moderate": "4-5 тренировок в неделю",
+    "active": "6-7 тренировок в неделю",
+}
+
+
+# ── Edit profile keyboard ────────────────────────────────
+
+def edit_profile_kb() -> InlineKeyboardMarkup:
+    """Fields the user can edit from profile screen."""
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(text="🎯 Цель", callback_data="edit_goal"),
+        InlineKeyboardButton(text="💪 Уровень", callback_data="edit_fitness_level"),
+    )
+    builder.row(
+        InlineKeyboardButton(text="🏋️ Стиль", callback_data="edit_training_style"),
+        InlineKeyboardButton(text="🏃 Активность", callback_data="edit_activity_level"),
+    )
+    builder.row(
+        InlineKeyboardButton(text="📏 Рост", callback_data="edit_height_cm"),
+        InlineKeyboardButton(text="⚖️ Вес", callback_data="edit_weight_kg"),
+    )
+    builder.row(
+        InlineKeyboardButton(text="🍽 Ограничения питания", callback_data="edit_dietary_restrictions"),
+    )
+    builder.row(
+        InlineKeyboardButton(text="🤧 Аллергии", callback_data="edit_allergies"),
+        InlineKeyboardButton(text="⚠️ Травмы", callback_data="edit_limitations"),
+    )
+    builder.row(
+        InlineKeyboardButton(text="◀️ Назад", callback_data="menu_profile"),
+    )
+    return builder.as_markup()
+
+
 # ── Exercise name keyboard ───────────────────────────────
 
 def exercise_name_kb() -> InlineKeyboardMarkup:
@@ -193,6 +246,9 @@ EXERCISE_LABELS = {
 def profile_kb() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.row(
-        InlineKeyboardButton(text="◀️ Назад", callback_data="menu_back"),
+        InlineKeyboardButton(text="✏️ Изменить", callback_data="edit_profile"),
+    )
+    builder.row(
+        InlineKeyboardButton(text="◀️ Меню", callback_data="menu_back"),
     )
     return builder.as_markup()

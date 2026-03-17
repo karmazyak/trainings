@@ -1,4 +1,4 @@
-"""Quick 3-step onboarding: goal → fitness_level → gender → auto-generate first workout."""
+"""5-tap onboarding: goal → fitness_level → gender → training_style → activity_level."""
 
 import logging
 
@@ -10,9 +10,11 @@ from tg_bot import prompts, texts
 from tg_bot.api_client import AreteAPI
 from tg_bot.db import save_user, set_conversation_id
 from tg_bot.keyboards import (
+    ACTIVITY_LABELS,
     FITNESS_LABELS,
     GOAL_LABELS,
     TRAINING_STYLE_LABELS,
+    activity_level_kb,
     after_skill_kb,
     fitness_level_kb,
     gender_kb,
@@ -58,21 +60,33 @@ async def process_gender(cb: CallbackQuery, state: FSMContext):
     await cb.answer()
 
 
-# ── Step 4: Training Style → Create profile → First workout ─
+# ── Step 4: Training Style → Activity Level ─────────────
 
 @router.callback_query(QuickOnboardingStates.training_style, F.data.startswith("style_"))
-async def process_training_style(cb: CallbackQuery, state: FSMContext, api: AreteAPI):
+async def process_training_style(cb: CallbackQuery, state: FSMContext):
     style_value = cb.data.replace("style_", "")
+    await state.update_data(training_style=style_value)
+    await state.set_state(QuickOnboardingStates.activity_level)
+    await cb.message.edit_text(texts.ONBOARDING_ACTIVITY_LEVEL, reply_markup=activity_level_kb())
+    await cb.answer()
+
+
+# ── Step 5: Activity Level → Create profile → First workout ─
+
+@router.callback_query(QuickOnboardingStates.activity_level, F.data.startswith("activity_"))
+async def process_activity_level(cb: CallbackQuery, state: FSMContext, api: AreteAPI):
+    activity_value = cb.data.replace("activity_", "")
     data = await state.get_data()
     await state.clear()
 
-    # Create minimal profile
+    # Create profile with all collected data
     payload = {
         "name": data["name"],
         "goal": data.get("goal"),
         "fitness_level": data.get("fitness_level"),
         "gender": data.get("gender"),
-        "training_style": style_value,
+        "training_style": data.get("training_style"),
+        "activity_level": ACTIVITY_LABELS.get(activity_value, activity_value),
     }
 
     try:

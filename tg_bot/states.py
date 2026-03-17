@@ -2,11 +2,12 @@ from aiogram.fsm.state import State, StatesGroup
 
 
 class QuickOnboardingStates(StatesGroup):
-    """4-tap onboarding: goal → fitness_level → gender → training_style."""
+    """5-tap onboarding: goal → fitness_level → gender → training_style → activity_level."""
     goal = State()
     fitness_level = State()
     gender = State()
     training_style = State()
+    activity_level = State()
 
 
 class SkillStates(StatesGroup):
@@ -27,5 +28,6 @@ class FeedbackStates(StatesGroup):
 
 
 class EditProfileStates(StatesGroup):
+    """Edit profile: user picks a field, then enters/selects new value."""
     choosing_field = State()
-    entering_value = State()
+    entering_value = State()  # for text fields (height, weight, allergies, etc.)
