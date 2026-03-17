@@ -154,56 +154,6 @@ async def _generate_and_cache(
     return response_text, sources
 
 
-@router.get("/{user_id}/{plan_type}", response_model=PlanResponse)
-async def get_plan(
-    user_id: UUID,
-    plan_type: str,
-    prompt: str,
-    force: bool = False,
-    db: AsyncSession = Depends(get_db),
-):
-    """Get plan from cache or generate new one.
-
-    Query params:
-    - prompt: the skill prompt to use for generation
-    - force: if True, always regenerate
-    """
-    if plan_type not in PLAN_AGENTS:
-        raise HTTPException(400, f"Unknown plan_type: {plan_type}")
-
-    user = await db.get(User, user_id)
-    if not user:
-        raise HTTPException(404, "User not found")
-
-    week, year = _current_week()
-
-    # Check cache (unless force)
-    if not force:
-        cached = await _get_cached(db, user.id, plan_type)
-        if cached:
-            sources = []
-            if cached.sources_json:
-                sources = [SourceReference(**s) for s in cached.sources_json]
-            return PlanResponse(
-                plan_type=plan_type,
-                content=cached.content,
-                sources=sources,
-                cached=True,
-                week_number=week,
-                created_at=cached.created_at.isoformat() if cached.created_at else None,
-            )
-
-    # Generate new
-    content, sources = await _generate_and_cache(db, user, plan_type, prompt)
-    return PlanResponse(
-        plan_type=plan_type,
-        content=content,
-        sources=sources,
-        cached=False,
-        week_number=week,
-    )
-
-
 @router.get("/{user_id}/my-day", response_model=MyDayResponse)
 async def get_my_day(
     user_id: UUID,
@@ -268,4 +218,54 @@ async def get_my_day(
         workout=workout_text,
         meal=meal_text,
         day_label=day_label,
+    )
+
+
+@router.get("/{user_id}/{plan_type}", response_model=PlanResponse)
+async def get_plan(
+    user_id: UUID,
+    plan_type: str,
+    prompt: str,
+    force: bool = False,
+    db: AsyncSession = Depends(get_db),
+):
+    """Get plan from cache or generate new one.
+
+    Query params:
+    - prompt: the skill prompt to use for generation
+    - force: if True, always regenerate
+    """
+    if plan_type not in PLAN_AGENTS:
+        raise HTTPException(400, f"Unknown plan_type: {plan_type}")
+
+    user = await db.get(User, user_id)
+    if not user:
+        raise HTTPException(404, "User not found")
+
+    week, year = _current_week()
+
+    # Check cache (unless force)
+    if not force:
+        cached = await _get_cached(db, user.id, plan_type)
+        if cached:
+            sources = []
+            if cached.sources_json:
+                sources = [SourceReference(**s) for s in cached.sources_json]
+            return PlanResponse(
+                plan_type=plan_type,
+                content=cached.content,
+                sources=sources,
+                cached=True,
+                week_number=week,
+                created_at=cached.created_at.isoformat() if cached.created_at else None,
+            )
+
+    # Generate new
+    content, sources = await _generate_and_cache(db, user, plan_type, prompt)
+    return PlanResponse(
+        plan_type=plan_type,
+        content=content,
+        sources=sources,
+        cached=False,
+        week_number=week,
     )
