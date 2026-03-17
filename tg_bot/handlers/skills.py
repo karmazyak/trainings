@@ -1,4 +1,4 @@
-"""Skill handlers: structured actions that construct prompts and send to /chat."""
+"""Skill handlers: structured actions with plan caching."""
 
 import logging
 from html import escape
@@ -16,6 +16,27 @@ from tg_bot.states import SkillStates
 
 logger = logging.getLogger(__name__)
 router = Router()
+
+# Map callback → (plan_type, prompt, agent, repeat_callback, repeat_label)
+PLAN_SKILLS = {
+    "skill_workout_today": ("workout_today", prompts.WORKOUT_TODAY, "trainer", "skill_workout_today_new", "🔄 Новая тренировка"),
+    "skill_workout_week": ("workout_week", prompts.WORKOUT_WEEK, "trainer", "skill_workout_week_new", "🔄 Новая программа"),
+    "skill_meal_today": ("meal_today", prompts.MEAL_TODAY, "dietologist", "skill_meal_today_new", "🔄 Новый рацион"),
+    "skill_meal_week": ("meal_week", prompts.MEAL_WEEK, "dietologist", "skill_meal_week_new", "🔄 Новый рацион"),
+    "skill_full_plan": ("full_plan", prompts.FULL_PLAN, "auto", "skill_full_plan_new", "🔄 Новый план"),
+}
+
+# Force-regenerate callbacks (same skills but with force=True)
+FORCE_REGEN = {
+    "skill_workout_today_new": "skill_workout_today",
+    "skill_workout_week_new": "skill_workout_week",
+    "skill_meal_today_new": "skill_meal_today",
+    "skill_meal_week_new": "skill_meal_week",
+    "skill_full_plan_new": "skill_full_plan",
+}
+
+# Skills requiring height/weight check
+NEEDS_PROFILE = {"skill_meal_today", "skill_meal_week", "skill_full_plan"}
 
 
 # ── Helpers ──────────────────────────────────────────────
@@ -51,52 +72,45 @@ async def _send_long(bot_msg, text: str, reply_markup=None, parse_mode="HTML"):
         await bot_msg.answer("⬇️", reply_markup=reply_markup)
 
 
-async def _run_skill(
+async def _run_cached_skill(
     cb: CallbackQuery,
     api: AreteAPI,
     user_data: dict,
-    prompt: str,
-    agent: str,
-    repeat_callback: str,
-    repeat_label: str,
-    thinking_text: str = texts.THINKING,
+    skill_key: str,
+    force: bool = False,
 ):
-    """Universal skill execution: send crafted prompt to /chat, show result."""
+    """Run a skill with plan caching. Shows cached plan instantly, or generates new."""
+    plan_type, prompt, agent, repeat_cb, repeat_label = PLAN_SKILLS[skill_key]
     backend_user_id = user_data["backend_user_id"]
-    conversation_id = user_data.get("conversation_id")
 
-    status_msg = await cb.message.edit_text(thinking_text)
+    thinking = texts.THINKING_FULL if skill_key == "skill_full_plan" else texts.THINKING
+    status_msg = await cb.message.edit_text(thinking)
 
     try:
-        result = await api.chat(
+        result = await api.get_plan(
             user_id=backend_user_id,
-            message=prompt,
-            agent=agent,
-            conversation_id=conversation_id,
+            plan_type=plan_type,
+            prompt=prompt,
+            force=force,
         )
     except httpx.HTTPStatusError:
-        logger.exception("Skill API error")
+        logger.exception("Plan API error")
         await status_msg.edit_text(texts.SERVER_ERROR)
         return
     except Exception:
-        logger.exception("Skill error")
+        logger.exception("Plan error")
         await status_msg.edit_text(texts.SERVER_ERROR)
         return
 
-    # Save conversation_id
-    new_conv_id = result.get("conversation_id")
-    if new_conv_id and new_conv_id != conversation_id:
-        await set_conversation_id(cb.from_user.id, new_conv_id)
-        user_data["conversation_id"] = new_conv_id
+    content = result.get("content", "")
+    cached = result.get("cached", False)
 
-    # Format response
-    agent_used = result.get("agent_used", agent)
-    label = texts.AGENT_LABELS.get(agent_used, "🏛 Arete")
-    response = result.get("message", "")
+    # Show cache status label
+    cache_label = texts.PLAN_FROM_CACHE if cached else texts.PLAN_FRESH
+    agent_label = texts.AGENT_LABELS.get(agent if agent != "auto" else "both", "🏛 Arete")
 
-    text = f"<b>{escape(label)}</b>\n\n{response}"
-    message_db_id = result.get("message_db_id")
-    kb = after_skill_kb(repeat_callback, repeat_label, message_db_id=message_db_id)
+    text = f"<b>{escape(agent_label)}</b>  <i>{cache_label}</i>\n\n{content}"
+    kb = after_skill_kb(repeat_cb, repeat_label)
 
     await _send_long(status_msg, text, reply_markup=kb)
 
@@ -108,7 +122,7 @@ async def _run_ask_skill(
     agent: str,
     repeat_callback: str,
 ):
-    """Handle free-text question to a specific agent."""
+    """Handle free-text question to a specific agent (no caching)."""
     backend_user_id = user_data["backend_user_id"]
     conversation_id = user_data.get("conversation_id")
 
@@ -141,42 +155,49 @@ async def _run_ask_skill(
     await _send_long(status_msg, text, reply_markup=kb)
 
 
-# ── Workout Skills ───────────────────────────────────────
+# ── "My Day" — compact today view ────────────────────────
 
 
-@router.callback_query(lambda cb: cb.data == "skill_workout_today")
-async def skill_workout_today(cb: CallbackQuery, api: AreteAPI, user_data: dict | None):
+@router.callback_query(lambda cb: cb.data == "skill_my_day")
+async def skill_my_day(cb: CallbackQuery, api: AreteAPI, user_data: dict | None):
     if not user_data:
         await cb.message.edit_text(texts.NOT_REGISTERED)
         await cb.answer()
         return
     await cb.answer()
-    await _run_skill(
-        cb, api, user_data,
-        prompt=prompts.WORKOUT_TODAY,
-        agent="trainer",
-        repeat_callback="skill_workout_today",
-        repeat_label="Новая тренировка",
-    )
 
+    status_msg = await cb.message.edit_text(texts.MY_DAY_THINKING)
 
-@router.callback_query(lambda cb: cb.data == "skill_workout_week")
-async def skill_workout_week(cb: CallbackQuery, api: AreteAPI, user_data: dict | None):
-    if not user_data:
-        await cb.message.edit_text(texts.NOT_REGISTERED)
-        await cb.answer()
+    try:
+        result = await api.get_my_day(user_data["backend_user_id"])
+    except Exception:
+        logger.exception("My day error")
+        await status_msg.edit_text(texts.SERVER_ERROR)
         return
-    await cb.answer()
-    await _run_skill(
-        cb, api, user_data,
-        prompt=prompts.WORKOUT_WEEK,
-        agent="trainer",
-        repeat_callback="skill_workout_week",
-        repeat_label="Новая программа",
-    )
+
+    workout = result.get("workout")
+    meal = result.get("meal")
+    day_label = result.get("day_label", "")
+
+    if not workout and not meal:
+        await status_msg.edit_text(texts.MY_DAY_NO_PLANS, reply_markup=main_menu_kb())
+        return
+
+    parts = [texts.MY_DAY_HEADER.format(day_label=day_label)]
+
+    if workout:
+        parts.append("<b>🏋️ Тренировка</b>\n" + workout)
+
+    if meal:
+        parts.append("<b>🥗 Питание</b>\n" + meal)
+
+    text = "\n\n".join(parts)
+    kb = main_menu_kb()
+
+    await _send_long(status_msg, text, reply_markup=kb)
 
 
-# ── Meal Skills (with progressive profiling) ────────────
+# ── Cached Plan Skills ────────────────────────────────────
 
 
 async def _check_profile_for_meal(
@@ -186,7 +207,7 @@ async def _check_profile_for_meal(
     user_data: dict,
     pending_skill: str,
 ) -> bool:
-    """Check if height/weight are set. If not, start collection. Returns True if ready."""
+    """Check if height/weight are set. If not, start collection."""
     try:
         profile = await api.get_user(user_data["backend_user_id"])
     except Exception:
@@ -203,46 +224,43 @@ async def _check_profile_for_meal(
     return True
 
 
-@router.callback_query(lambda cb: cb.data == "skill_meal_today")
-async def skill_meal_today(cb: CallbackQuery, state: FSMContext, api: AreteAPI, user_data: dict | None):
+@router.callback_query(lambda cb: cb.data in PLAN_SKILLS)
+async def handle_plan_skill(cb: CallbackQuery, state: FSMContext, api: AreteAPI, user_data: dict | None):
+    """Universal handler for all plan skills (with caching)."""
     if not user_data:
         await cb.message.edit_text(texts.NOT_REGISTERED)
         await cb.answer()
         return
     await cb.answer()
 
-    ready = await _check_profile_for_meal(cb, state, api, user_data, "skill_meal_today")
-    if not ready:
-        return
+    skill_key = cb.data
 
-    await _run_skill(
-        cb, api, user_data,
-        prompt=prompts.MEAL_TODAY,
-        agent="dietologist",
-        repeat_callback="skill_meal_today",
-        repeat_label="Новый рацион",
-    )
+    # Check profile for meal skills
+    if skill_key in NEEDS_PROFILE:
+        ready = await _check_profile_for_meal(cb, state, api, user_data, skill_key)
+        if not ready:
+            return
+
+    await _run_cached_skill(cb, api, user_data, skill_key, force=False)
 
 
-@router.callback_query(lambda cb: cb.data == "skill_meal_week")
-async def skill_meal_week(cb: CallbackQuery, state: FSMContext, api: AreteAPI, user_data: dict | None):
+@router.callback_query(lambda cb: cb.data in FORCE_REGEN)
+async def handle_force_regen(cb: CallbackQuery, state: FSMContext, api: AreteAPI, user_data: dict | None):
+    """Force-regenerate a plan (user clicked '🔄 Новая ...')."""
     if not user_data:
         await cb.message.edit_text(texts.NOT_REGISTERED)
         await cb.answer()
         return
     await cb.answer()
 
-    ready = await _check_profile_for_meal(cb, state, api, user_data, "skill_meal_week")
-    if not ready:
-        return
+    original_skill = FORCE_REGEN[cb.data]
 
-    await _run_skill(
-        cb, api, user_data,
-        prompt=prompts.MEAL_WEEK,
-        agent="dietologist",
-        repeat_callback="skill_meal_week",
-        repeat_label="Новый рацион",
-    )
+    if original_skill in NEEDS_PROFILE:
+        ready = await _check_profile_for_meal(cb, state, api, user_data, original_skill)
+        if not ready:
+            return
+
+    await _run_cached_skill(cb, api, user_data, original_skill, force=True)
 
 
 # ── Progressive Profiling: height/weight collection ─────
@@ -292,89 +310,51 @@ async def collect_weight(message: Message, state: FSMContext, api: AreteAPI, use
 
     await message.answer(texts.PROFILE_UPDATED_GENERATING)
 
-    # Determine which skill to run
-    skill_map = {
-        "skill_meal_today": (prompts.MEAL_TODAY, "dietologist", "skill_meal_today", "Новый рацион"),
-        "skill_meal_week": (prompts.MEAL_WEEK, "dietologist", "skill_meal_week", "Новый рацион"),
-        "skill_full_plan": (prompts.FULL_PLAN, "auto", "skill_full_plan", "Новый план"),
-    }
+    # Now generate via cached plan API
+    if pending_skill in PLAN_SKILLS:
+        plan_type, prompt_text, agent, repeat_cb, repeat_label = PLAN_SKILLS[pending_skill]
 
-    prompt_text, agent, repeat_cb, repeat_label = skill_map.get(
-        pending_skill, (prompts.MEAL_TODAY, "dietologist", "skill_meal_today", "Новый рацион")
-    )
+        # Add height/weight to prompt
+        extra = f"\n\nМои данные: рост {height_cm} см, вес {weight} кг."
+        full_prompt = prompt_text + extra
 
-    # Add height/weight to prompt since backend may not have it yet
-    extra = f"\n\nМои данные: рост {height_cm} см, вес {weight} кг."
-    prompt_text = prompt_text + extra
+        backend_user_id = user_data["backend_user_id"]
 
-    backend_user_id = user_data["backend_user_id"]
-    conversation_id = user_data.get("conversation_id")
+        try:
+            result = await api.get_plan(
+                user_id=backend_user_id,
+                plan_type=plan_type,
+                prompt=full_prompt,
+                force=True,
+            )
+        except Exception:
+            logger.exception("Skill after profiling error")
+            await message.answer(texts.SERVER_ERROR)
+            return
 
-    try:
-        result = await api.chat(
-            user_id=backend_user_id,
-            message=prompt_text,
-            agent=agent,
-            conversation_id=conversation_id,
-        )
-    except Exception:
-        logger.exception("Skill after profiling error")
-        await message.answer(texts.SERVER_ERROR)
-        return
+        content = result.get("content", "")
+        agent_label = texts.AGENT_LABELS.get(agent if agent != "auto" else "both", "🏛 Arete")
+        text = f"<b>{escape(agent_label)}</b>  <i>{texts.PLAN_FRESH}</i>\n\n{content}"
+        kb = after_skill_kb(repeat_cb, repeat_label)
 
-    new_conv_id = result.get("conversation_id")
-    if new_conv_id and new_conv_id != conversation_id:
-        await set_conversation_id(message.from_user.id, new_conv_id)
-
-    agent_used = result.get("agent_used", agent)
-    label = texts.AGENT_LABELS.get(agent_used, "🏛 Arete")
-    response = result.get("message", "")
-    text = f"<b>{escape(label)}</b>\n\n{response}"
-
-    message_db_id = result.get("message_db_id")
-    kb = after_skill_kb(repeat_cb, repeat_label, message_db_id=message_db_id)
-
-    # Send (may need splitting)
-    if len(text) > 4000:
-        parts = []
-        remaining = text
-        while len(remaining) > 4000:
-            split_at = remaining.rfind("\n", 0, 4000)
-            if split_at == -1:
-                split_at = 4000
-            parts.append(remaining[:split_at])
-            remaining = remaining[split_at:].lstrip()
-        parts.append(remaining)
-        for i, part in enumerate(parts):
-            part_kb = kb if i == len(parts) - 1 else None
-            await message.answer(part, reply_markup=part_kb)
+        # Send (may need splitting)
+        if len(text) > 4000:
+            parts = []
+            remaining = text
+            while len(remaining) > 4000:
+                split_at = remaining.rfind("\n", 0, 4000)
+                if split_at == -1:
+                    split_at = 4000
+                parts.append(remaining[:split_at])
+                remaining = remaining[split_at:].lstrip()
+            parts.append(remaining)
+            for i, part in enumerate(parts):
+                part_kb = kb if i == len(parts) - 1 else None
+                await message.answer(part, reply_markup=part_kb)
+        else:
+            await message.answer(text, reply_markup=kb)
     else:
-        await message.answer(text, reply_markup=kb)
-
-
-# ── Full Plan ────────────────────────────────────────────
-
-
-@router.callback_query(lambda cb: cb.data == "skill_full_plan")
-async def skill_full_plan(cb: CallbackQuery, state: FSMContext, api: AreteAPI, user_data: dict | None):
-    if not user_data:
-        await cb.message.edit_text(texts.NOT_REGISTERED)
-        await cb.answer()
-        return
-    await cb.answer()
-
-    ready = await _check_profile_for_meal(cb, state, api, user_data, "skill_full_plan")
-    if not ready:
-        return
-
-    await _run_skill(
-        cb, api, user_data,
-        prompt=prompts.FULL_PLAN,
-        agent="auto",
-        repeat_callback="skill_full_plan",
-        repeat_label="Новый план",
-        thinking_text=texts.THINKING_FULL,
-    )
+        await message.answer("Готово! Используй меню для генерации планов.", reply_markup=main_menu_kb())
 
 
 # ── Ask Trainer / Dietologist ────────────────────────────

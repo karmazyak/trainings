@@ -21,6 +21,7 @@ class UserCreate(BaseModel):
     weight_kg: float | None = None
     goal: str | None = None
     fitness_level: str | None = None
+    training_style: str | None = None  # gym, home, crossfit, running
     limitations: str | None = None
     dietary_restrictions: str | None = None
     allergies: str | None = None
@@ -36,6 +37,7 @@ class UserUpdate(BaseModel):
     weight_kg: float | None = None
     goal: str | None = None
     fitness_level: str | None = None
+    training_style: str | None = None
     limitations: str | None = None
     dietary_restrictions: str | None = None
     allergies: str | None = None
@@ -52,6 +54,7 @@ class UserResponse(BaseModel):
     weight_kg: float | None
     goal: str | None
     fitness_level: str | None
+    training_style: str | None
     limitations: str | None
     dietary_restrictions: str | None
     allergies: str | None
@@ -138,3 +141,21 @@ class ExerciseAnalyzeResponse(BaseModel):
     reps_count: int
     analysis_report: str
     trainer_feedback: str
+
+
+# ── Plans (cached) ────────────────────────────────────
+
+
+class PlanResponse(BaseModel):
+    plan_type: str
+    content: str
+    sources: list[SourceReference] = []
+    cached: bool = False  # True if served from cache
+    week_number: int
+    created_at: str | None = None
+
+
+class MyDayResponse(BaseModel):
+    workout: str | None = None
+    meal: str | None = None
+    day_label: str = ""  # e.g. "Понедельник"

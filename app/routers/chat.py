@@ -47,6 +47,14 @@ def format_user_context(user: User) -> str:
         parts.append(f"Цель: {user.goal}")
     if user.fitness_level:
         parts.append(f"Уровень подготовки: {user.fitness_level}")
+    if user.training_style:
+        style_labels = {
+            "gym": "Тренировки в зале (штанги, тренажёры, гантели)",
+            "home": "Домашние тренировки (собственный вес, гантели, резинки)",
+            "crossfit": "Кроссфит / функциональный тренинг (WOD, AMRAP, EMOM)",
+            "running": "Бег, растяжка, йога, кардио",
+        }
+        parts.append(f"Стиль тренировок: {style_labels.get(user.training_style, user.training_style)}")
     if user.activity_level:
         parts.append(f"Уровень активности: {user.activity_level}")
     if user.limitations:

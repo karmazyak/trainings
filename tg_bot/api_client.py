@@ -41,6 +41,32 @@ class AreteAPI:
         resp.raise_for_status()
         return resp.json()
 
+    async def get_plan(
+        self,
+        user_id: str,
+        plan_type: str,
+        prompt: str,
+        force: bool = False,
+    ) -> dict:
+        """Get plan from cache or generate new."""
+        params = {"prompt": prompt, "force": str(force).lower()}
+        resp = await self._client.get(
+            f"/plans/{user_id}/{plan_type}",
+            params=params,
+            timeout=90.0,
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    async def get_my_day(self, user_id: str) -> dict:
+        """Get today's workout + meal from cached plans."""
+        resp = await self._client.get(
+            f"/plans/{user_id}/my-day",
+            timeout=60.0,
+        )
+        resp.raise_for_status()
+        return resp.json()
+
     async def analyze_exercise(
         self,
         user_id: str,

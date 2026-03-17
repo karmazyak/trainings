@@ -7,6 +7,9 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 def main_menu_kb() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.row(
+        InlineKeyboardButton(text="📅 Мой день", callback_data="skill_my_day"),
+    )
+    builder.row(
         InlineKeyboardButton(text="🏋️ Тренировка на сегодня", callback_data="skill_workout_today"),
         InlineKeyboardButton(text="🥗 Питание на сегодня", callback_data="skill_meal_today"),
     )
@@ -137,6 +140,29 @@ def gender_kb() -> InlineKeyboardMarkup:
         InlineKeyboardButton(text="♀ Женский", callback_data="gender_female"),
     )
     return builder.as_markup()
+
+
+# ── Training style keyboard ────────────────────────────
+
+def training_style_kb() -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(text="🏋️ Зал", callback_data="style_gym"),
+        InlineKeyboardButton(text="🏠 Дома", callback_data="style_home"),
+    )
+    builder.row(
+        InlineKeyboardButton(text="🤸 Кроссфит", callback_data="style_crossfit"),
+        InlineKeyboardButton(text="🏃 Бег / Йога", callback_data="style_running"),
+    )
+    return builder.as_markup()
+
+
+TRAINING_STYLE_LABELS = {
+    "gym": "Зал",
+    "home": "Дома",
+    "crossfit": "Кроссфит",
+    "running": "Бег / Йога",
+}
 
 
 # ── Exercise name keyboard ───────────────────────────────

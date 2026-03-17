@@ -12,10 +12,12 @@ from tg_bot.db import save_user, set_conversation_id
 from tg_bot.keyboards import (
     FITNESS_LABELS,
     GOAL_LABELS,
+    TRAINING_STYLE_LABELS,
     after_skill_kb,
     fitness_level_kb,
     gender_kb,
     main_menu_kb,
+    training_style_kb,
 )
 from tg_bot.states import QuickOnboardingStates
 
@@ -45,20 +47,32 @@ async def process_fitness(cb: CallbackQuery, state: FSMContext):
     await cb.answer()
 
 
-# ── Step 3: Gender → Create profile → First workout ─────
+# ── Step 3: Gender → Training Style ──────────────────────
 
 @router.callback_query(QuickOnboardingStates.gender, F.data.startswith("gender_"))
-async def process_gender(cb: CallbackQuery, state: FSMContext, api: AreteAPI):
+async def process_gender(cb: CallbackQuery, state: FSMContext):
     value = cb.data.replace("gender_", "")
+    await state.update_data(gender=value)
+    await state.set_state(QuickOnboardingStates.training_style)
+    await cb.message.edit_text(texts.ONBOARDING_TRAINING_STYLE, reply_markup=training_style_kb())
+    await cb.answer()
+
+
+# ── Step 4: Training Style → Create profile → First workout ─
+
+@router.callback_query(QuickOnboardingStates.training_style, F.data.startswith("style_"))
+async def process_training_style(cb: CallbackQuery, state: FSMContext, api: AreteAPI):
+    style_value = cb.data.replace("style_", "")
     data = await state.get_data()
     await state.clear()
 
-    # Create minimal profile (name from Telegram)
+    # Create minimal profile
     payload = {
         "name": data["name"],
         "goal": data.get("goal"),
         "fitness_level": data.get("fitness_level"),
-        "gender": value,
+        "gender": data.get("gender"),
+        "training_style": style_value,
     }
 
     try:

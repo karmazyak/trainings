@@ -19,6 +19,7 @@ class User(Base):
     weight_kg: Mapped[float | None] = mapped_column(Float, nullable=True)
     goal: Mapped[str | None] = mapped_column(String(200), nullable=True)
     fitness_level: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    training_style: Mapped[str | None] = mapped_column(String(50), nullable=True)  # gym, home, crossfit, running
     limitations: Mapped[str | None] = mapped_column(Text, nullable=True)
     dietary_restrictions: Mapped[str | None] = mapped_column(Text, nullable=True)
     allergies: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -112,6 +113,24 @@ class AgentPlan(Base):
 
     __table_args__ = (
         Index("ix_agent_plans_user_agent", "user_id", "agent_type"),
+    )
+
+
+class CachedPlan(Base):
+    """Cached generated plans to avoid re-generating on every request."""
+    __tablename__ = "cached_plans"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"))
+    plan_type: Mapped[str] = mapped_column(String(30))  # workout_today, workout_week, meal_today, meal_week, full_plan
+    content: Mapped[str] = mapped_column(Text)
+    sources_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    week_number: Mapped[int] = mapped_column(Integer)  # ISO week number for cache invalidation
+    year: Mapped[int] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        Index("ix_cached_plans_user_type_week", "user_id", "plan_type", "week_number", "year"),
     )
 
 

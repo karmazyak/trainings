@@ -15,6 +15,7 @@ router = Router()
 
 def _format_profile(data: dict) -> str:
     gender_map = {"male": "Мужской", "female": "Женский"}
+    style_map = {"gym": "🏋️ Зал", "home": "🏠 Дома", "crossfit": "🤸 Кроссфит", "running": "🏃 Бег / Йога"}
     lines = [
         f"👤 <b>Имя:</b> {escape(str(data.get('name', '—')))}",
         f"⚧ <b>Пол:</b> {escape(gender_map.get(data.get('gender', ''), '—'))}",
@@ -23,6 +24,7 @@ def _format_profile(data: dict) -> str:
         f"⚖️ <b>Вес:</b> {data.get('weight_kg', '—')} кг",
         f"🎯 <b>Цель:</b> {escape(str(data.get('goal', '—')))}",
         f"💪 <b>Уровень:</b> {escape(str(data.get('fitness_level', '—')))}",
+        f"🏋️ <b>Стиль:</b> {escape(style_map.get(data.get('training_style', ''), '—'))}",
         f"🏃 <b>Активность:</b> {escape(str(data.get('activity_level', '—')))}",
         f"⚠️ <b>Ограничения:</b> {escape(str(data.get('limitations') or 'Нет'))}",
         f"🍽 <b>Питание:</b> {escape(str(data.get('dietary_restrictions') or 'Нет'))}",

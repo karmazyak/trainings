@@ -2,10 +2,11 @@ from aiogram.fsm.state import State, StatesGroup
 
 
 class QuickOnboardingStates(StatesGroup):
-    """3-tap onboarding: goal → fitness_level → gender."""
+    """4-tap onboarding: goal → fitness_level → gender → training_style."""
     goal = State()
     fitness_level = State()
     gender = State()
+    training_style = State()
 
 
 class SkillStates(StatesGroup):
