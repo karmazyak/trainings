@@ -5,8 +5,10 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from sqlalchemy.orm import selectinload
+
 from app.database import get_db
-from app.models import Feedback, Message, UserPreference
+from app.models import Conversation, Feedback, Message, UserPreference
 from app.schemas import FeedbackCreate, FeedbackResponse, UserPreferenceResponse
 from app.services.preferences import extract_preferences, save_preferences
 
@@ -17,8 +19,14 @@ router = APIRouter(prefix="/feedback", tags=["feedback"])
 
 @router.post("", response_model=FeedbackResponse)
 async def submit_feedback(data: FeedbackCreate, db: AsyncSession = Depends(get_db)):
-    # Validate message exists
-    msg = await db.get(Message, data.message_id)
+    # Validate message exists (eagerly load conversation for agent_type)
+    stmt = (
+        select(Message)
+        .where(Message.id == data.message_id)
+        .options(selectinload(Message.conversation))
+    )
+    result = await db.execute(stmt)
+    msg = result.scalar_one_or_none()
     if not msg:
         raise HTTPException(status_code=404, detail="Message not found")
 
