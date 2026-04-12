@@ -13,12 +13,12 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.agents.base import llm_call_cheap
+from app.agents.base import llm_call_cheap, LLMError
 from app.agents.dietologist import dietologist_agent
 from app.agents.router import handle_both, route_message
 from app.agents.trainer import trainer_agent
 from app.database import get_db
-from app.models import CachedPlan, User
+from app.models import CachedPlan, TrainingSession, User
 from app.rag.retriever import RetrievedChunk
 from app.routers.chat import format_user_context, _build_sources
 from app.schemas import MyDayResponse, PlanResponse, SourceReference
@@ -95,7 +95,7 @@ async def _generate_and_cache(
 
     prefs = await get_user_preferences(db, user.id)
     prefs_text = format_preferences_for_prompt(prefs)
-    user_context = format_user_context(user)
+    user_context = await format_user_context(user, db)
 
     if agent_key == "auto":
         # Full plan uses both agents
@@ -151,6 +151,36 @@ async def _generate_and_cache(
             logger.exception("Failed to save plan summary")
 
     await db.commit()
+
+    # Auto-populate training schedule when workout_week is generated
+    if plan_type in ("workout_week", "full_plan"):
+        try:
+            from app.routers.schedule import _parse_workout_week_into_sessions, _get_week_sessions
+
+            existing = await _get_week_sessions(db, user.id, week, year)
+            if existing:
+                for s in existing:
+                    await db.delete(s)
+                await db.flush()
+
+            meal_cache = await _get_cached(db, user.id, "meal_week") if plan_type == "workout_week" else None
+            meal_plan = meal_cache.content if meal_cache else None
+
+            # For full_plan, the response contains both workout and meal
+            workout_text = response_text
+            if plan_type == "full_plan":
+                meal_plan = response_text  # full_plan has both, LLM will extract
+
+            sessions = await _parse_workout_week_into_sessions(
+                db, user, workout_text, meal_plan, week, year,
+            )
+            for s in sessions:
+                db.add(s)
+            await db.commit()
+            logger.info("Auto-populated %d training sessions for user %s", len(sessions), user.id)
+        except Exception:
+            logger.exception("Failed to auto-populate training schedule")
+
     return response_text, sources
 
 
@@ -159,7 +189,7 @@ async def get_my_day(
     user_id: UUID,
     db: AsyncSession = Depends(get_db),
 ):
-    """Extract today's workout + meal from cached weekly plans."""
+    """Get today's workout + meal. Prefers training_sessions (instant), falls back to LLM extraction."""
     user = await db.get(User, user_id)
     if not user:
         raise HTTPException(404, "User not found")
@@ -167,57 +197,51 @@ async def get_my_day(
     today = date.today()
     iso_weekday = today.isoweekday()  # 1=Mon ... 7=Sun
     day_label = DAY_NAMES_RU.get(iso_weekday, "")
-    day_number = f"День {iso_weekday}"
 
-    workout_text = None
-    meal_text = None
+    # 1) Try training_sessions table first (instant, no LLM)
+    week, year = _current_week()
+    stmt = select(TrainingSession).where(
+        and_(
+            TrainingSession.user_id == user.id,
+            TrainingSession.week_number == week,
+            TrainingSession.year == year,
+            TrainingSession.day_of_week == iso_weekday,
+        )
+    )
+    result = await db.execute(stmt)
+    session = result.scalar_one_or_none()
 
-    # Try to get cached weekly plans
+    if session:
+        return MyDayResponse(
+            workout=session.workout_content,
+            meal=session.meal_content,
+            day_label=day_label,
+            session_id=str(session.id),
+            session_status=session.status,
+            session_type=session.session_type,
+            session_title=session.title,
+            current_streak=user.current_streak,
+            max_streak=user.max_streak,
+        )
+
+    # 2) Fallback: use cached weekly plans directly (no extra LLM call)
     workout_cache = await _get_cached(db, user.id, "workout_week")
     meal_cache = await _get_cached(db, user.id, "meal_week")
 
-    # If no weekly plans, try today plans
     if not workout_cache:
         workout_cache = await _get_cached(db, user.id, "workout_today")
-        if workout_cache:
-            workout_text = workout_cache.content
-
     if not meal_cache:
         meal_cache = await _get_cached(db, user.id, "meal_today")
-        if meal_cache:
-            meal_text = meal_cache.content
 
-    # Extract today's portion from weekly plans via cheap LLM
-    if workout_cache and not workout_text:
-        try:
-            prompt = EXTRACT_DAY_PROMPT.format(
-                day_name=day_number, day_label=day_label,
-                plan_text=workout_cache.content[:3000],
-            )
-            workout_text = await llm_call_cheap(
-                [{"role": "user", "content": prompt}], temperature=0.1
-            )
-        except Exception:
-            logger.exception("Failed to extract today's workout")
-            workout_text = None
-
-    if meal_cache and not meal_text:
-        try:
-            prompt = EXTRACT_DAY_PROMPT.format(
-                day_name=day_number, day_label=day_label,
-                plan_text=meal_cache.content[:3000],
-            )
-            meal_text = await llm_call_cheap(
-                [{"role": "user", "content": prompt}], temperature=0.1
-            )
-        except Exception:
-            logger.exception("Failed to extract today's meal")
-            meal_text = None
+    workout_text = workout_cache.content if workout_cache else None
+    meal_text = meal_cache.content if meal_cache else None
 
     return MyDayResponse(
         workout=workout_text,
         meal=meal_text,
         day_label=day_label,
+        current_streak=user.current_streak,
+        max_streak=user.max_streak,
     )
 
 
@@ -261,7 +285,10 @@ async def get_plan(
             )
 
     # Generate new
-    content, sources = await _generate_and_cache(db, user, plan_type, prompt)
+    try:
+        content, sources = await _generate_and_cache(db, user, plan_type, prompt)
+    except LLMError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.message)
     return PlanResponse(
         plan_type=plan_type,
         content=content,
